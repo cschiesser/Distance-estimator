@@ -12,8 +12,36 @@ if __name__ == "__main__":
     print(f"[INFO]: Dataset loaded with {len(images)} samples.")
 
     # TODO: Your implementation starts here
+    # It takes as input an image captured by ANYmal's camera and it outputs an estimate of the distance to the closest obstacle in the image.
+
+    #What we have
+
+    #train_images : Here you see the robot's observations from its camera while it is travelling around an office.
+
+    #train_labels : Here you see the distance to the closest obstacle for each image in meters. 
 
     
+
+    #FEATURES -> train_images
+    #LABLES -> train_lables (distances)
+
+    #Images are represented by **pixel intensity values** 
+    #In a typical COLOUR image, pixel colours are obtained by mixing the primary colours red, green, and blue (RGB).
+
+    #Therefore, an image can be described as a matrix (M) of dimensions:        **W x H x3**
+
+    #PROCESSING
+
+    #To treat images as feature vectors, we FLATTEN the images, i.e. the rows of the image matrices are concatenated
+    #sequentially in a single row. In a colour image, we further flatten the colour dimension similarly.
+
+
+    #Then, each colour component of each pixel value can be thought of as a feature.
+    #For example, an RGB image with height = 30 pixels and width = 30 pixels gives us ** 30 x 30 x 3 = 2700 **
+    
+    
+    print(images[:5][:5])
+
 
     # possible preprocessing steps ... training the model
 
