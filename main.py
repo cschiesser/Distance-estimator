@@ -59,11 +59,18 @@ if __name__ == "__main__":
 
 
     ###DON'T REMOVE -> GRADING SIMULATION!!!!!!###
+    
     from sklearn.metrics import mean_absolute_error
     y_pred = model.predict(X_test)
     
     mae = mean_absolute_error(y_test, y_pred)
     print(mae)
+
+    # Save Kaggle submission using the test split
+    test_images = load_test_dataset(config)
+    test_pred = model.predict(test_images)
+    save_results(test_pred)
+
     ###DON'T REMOVE -> GRADING SIMULATION!!!!!!###
 
 
@@ -92,5 +99,3 @@ if __name__ == "__main__":
     # Evaluation
     # print_results(gt, pred)
 
-    # Save the results
-    # save_results(test_pred)
