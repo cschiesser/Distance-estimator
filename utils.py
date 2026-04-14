@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 
+
 from sklearn.metrics import mean_absolute_error, r2_score
 
 IMAGE_SIZE = (300, 300)
