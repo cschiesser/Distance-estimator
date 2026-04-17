@@ -8,15 +8,15 @@ from sklearn.model_selection import train_test_split
 # SVRs are not allowed in this project.
 #WICHTIG ist für Erklärungsauftrag
 
-def print_dataset_plot(bin_width=0.01, output_path="distance_distribution.png"):
+def print_dataset_plot(images_subset, distances_subset, bin_width=0.01, output_path="distance_distribution.png"):
     print("Dataset ARRAY")
-    print(images.shape)
-    print(distances.shape)
+    print(images_subset.shape)
+    print(distances_subset.shape)
 
-    print(images[0].max())
+    print(images_subset[0].max())
 
     # Plot a histogram: x-axis is distance, y-axis is number of samples.
-    distance_values = np.asarray(distances, dtype=float)
+    distance_values = np.asarray(distances_subset, dtype=float)
     min_distance = distance_values.min()
     max_distance = distance_values.max()
     bins = np.arange(min_distance, max_distance + bin_width, bin_width)
@@ -91,9 +91,9 @@ if __name__ == "__main__":
     Y = distances
 
     #HOW THE DATASET LOOKS LIKE
-    print_dataset_plot()
+    #print_dataset_plot()
 
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42,shuffle=True)
 
     #region Preprocessing Data
     """
@@ -166,10 +166,18 @@ if __name__ == "__main__":
     #Besser -> RobustScaler 
     #Unlike the previous scalers, the centering and scaling statistics of RobustScaler are based on percentiles and are therefore not influenced by a small number of very large marginal outliers.
     from sklearn.preprocessing import RobustScaler
-    robust_scaler = RobustScaler().fit(X_train)
-    X_scaled_robust = robust_scaler.transform(X_train)
+    robust_scaler = RobustScaler(
+        quantile_range=(25.0,75.0),
+        with_centering=True,
+        with_scaling=True
+    )
+
+    X_train_scaled_robust = robust_scaler.fit_transform(X_train)
+    X_test_scaled_robust = robust_scaler.transform(X_test)
+   
+
     print_feature_distribution_plot(
-        X_scaled_robust,
+        X_train_scaled_robust,
         bin_width=0.05,
         name="x_train_robust_scaled_distribution",
     )
@@ -179,21 +187,12 @@ if __name__ == "__main__":
     #endregion
     
 
-    from sklearn.preprocessing import QuantileTransformer
-
-    qt = QuantileTransformer()
-    X_Quantile= qt.fit_transform(X_train)
-    print_feature_distribution_plot(
-        X_Quantile,
-        bin_width=0.05,
-        name="x_train_Quantile"
-    )
 
 
+    from sklearn.linear_model import ElasticNet
+    from sklearn.datasets import make_regression
 
-
-    from sklearn import linear_model
-    model = linear_model.LinearRegression()
+    model = ElasticNet(alpha=1,max_iter=1000,random_state=42)
     model.fit(X_train,y_train)
 
 
@@ -201,13 +200,14 @@ if __name__ == "__main__":
 #region DON'T REMOVE -> GRADING SIMULATION!!!!!!###
     
     from sklearn.metrics import mean_absolute_error
-    y_pred = model.predict(X_test)
+    y_pred = model.predict(X_test_scaled_robust)
     
     mae = mean_absolute_error(y_test, y_pred)
     print(mae)
 
     # Save Kaggle submission using the test split
     test_images = load_test_dataset(config)
+    test_images_scaled = robust_scaler.transform(test_images)
     test_pred = model.predict(test_images)
     save_results(test_pred)
 
