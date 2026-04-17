@@ -50,7 +50,7 @@ if __name__ == "__main__":
     X = images
     Y = distances
 
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3)
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42)
 
     from sklearn import linear_model
     model = linear_model.LinearRegression()
