@@ -99,3 +99,26 @@ def save_results(pred):
 
     with open("prediction.csv", 'w') as f: 
         f.write(text)
+
+
+
+def print_dataset_plot(bin_width=0.01):
+    print("Dataset ARRAY")
+    print(images.shape)
+    print(distances.shape)
+
+    print(images[0].max())
+
+    # Plot a histogram: x-axis is distance, y-axis is number of samples.
+    distance_values = np.asarray(distances, dtype=float)
+    min_distance = distance_values.min()
+    max_distance = distance_values.max()
+    bins = np.arange(min_distance, max_distance + bin_width, bin_width)
+
+    fig, ax = plt.subplots()
+    ax.hist(distance_values, bins=bins, edgecolor="black", linewidth=0.3)
+    ax.set_xlabel("Distance")
+    ax.set_ylabel("Count")
+    ax.set_title(f"Distance Distribution (bin width = {bin_width:.3f} m)")
+    ax.grid(axis="y", alpha=0.2)
+    plt.show()
