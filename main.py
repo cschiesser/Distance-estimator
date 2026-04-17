@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 # SVRs are not allowed in this project.
 #WICHTIG ist für Erklärungsauftrag
 
-def print_dataset_plot(bin_width=0.01):
+def print_dataset_plot(bin_width=0.01, output_path="distance_distribution.png"):
     print("Dataset ARRAY")
     print(images.shape)
     print(distances.shape)
@@ -27,25 +27,30 @@ def print_dataset_plot(bin_width=0.01):
     ax.set_ylabel("Count")
     ax.set_title(f"Distance Distribution (bin width = {bin_width:.3f} m)")
     ax.grid(axis="y", alpha=0.2)
-    plt.show(block=False)
-    plt.pause(0.001)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO]: Saved plot to {output_path}")
 
 
-def print_feature_distribution_plot(feature_matrix, bin_width=0.05):
+def print_feature_distribution_plot(feature_matrix, bin_width=0.05, name="x_train_scaled_distribution", output_path=None):
     # Flatten all feature values to inspect their global distribution.
     feature_values = np.asarray(feature_matrix, dtype=float).ravel()
     min_value = feature_values.min()
     max_value = feature_values.max()
     bins = np.arange(min_value, max_value + bin_width, bin_width)
 
+    if output_path is None:
+        output_path = f"{name}.png"
+
     fig, ax = plt.subplots()
     ax.hist(feature_values, bins=bins, edgecolor="black", linewidth=0.3)
     ax.set_xlabel("Feature value")
     ax.set_ylabel("Count")
-    ax.set_title(f"X_train Scaled Feature Distribution (bin width = {bin_width:.3f})")
+    ax.set_title(f"{name} (bin width = {bin_width:.3f})")
     ax.grid(axis="y", alpha=0.2)
-    plt.show(block=False)
-    plt.pause(0.001)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[INFO]: Saved plot to {output_path}")
 
 #region Project Description
 """
@@ -145,14 +150,48 @@ if __name__ == "__main__":
 
     from sklearn import preprocessing
     
-    scaler = preprocessing.StandardScaler().fit(X_train)
-    X_scaled = scaler.transform(X_train)
+    #region Achtung: Both StandardScaler and MinMaxScaler are very sensitive to the presence of outliers. https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-plot-all-scaling-py
+    scaler_bad = preprocessing.StandardScaler().fit(X_train)
+    X_scaled_bad = scaler_bad.transform(X_train)
 
-    #SO SIEHTS NEU AUS
-    print_feature_distribution_plot(X_scaled, bin_width=0.05)
+    #SO SIEHTS NEU AUS aber schlecht wegen outliers bei standartscaler
+    print_feature_distribution_plot(
+        X_scaled_bad,
+        bin_width=0.05,
+        name="x_train_standard_scaled_distribution",
+    )
+
+
+
+    #Besser -> RobustScaler 
+    #Unlike the previous scalers, the centering and scaling statistics of RobustScaler are based on percentiles and are therefore not influenced by a small number of very large marginal outliers.
+    from sklearn.preprocessing import RobustScaler
+    robust_scaler = RobustScaler().fit(X_train)
+    X_scaled_robust = robust_scaler.transform(X_train)
+    print_feature_distribution_plot(
+        X_scaled_robust,
+        bin_width=0.05,
+        name="x_train_robust_scaled_distribution",
+    )
+
 
     #endregion
+    #endregion
     
+
+    from sklearn.preprocessing import QuantileTransformer
+
+    qt = QuantileTransformer()
+    X_Quantile= qt.fit_transform(X_train)
+    print_feature_distribution_plot(
+        X_Quantile,
+        bin_width=0.05,
+        name="x_train_Quantile"
+    )
+
+
+
+
     from sklearn import linear_model
     model = linear_model.LinearRegression()
     model.fit(X_train,y_train)
