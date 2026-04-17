@@ -1,5 +1,24 @@
-data_dir: ./data
+# === Daten ===
+data_dir: "./data"
+load_rgb: false           # false = grayscale, true = RGB (3x mehr Features)
+downsample_factor: 5      # 300x300 -> 60x60 (3600 Features grayscale)
 
-# Set the configs of data loading.
-load_rgb: # True | False
-downsample_factor: # [1, 300]
+# === Split ===
+val_size: 0.2             # Anteil Validation Split
+random_seed: 42           # Reproduzierbarkeit
+
+# === Preprocessing ===
+use_scaler: true          # StandardScaler an/aus
+
+# === Dimensionality Reduction ===
+use_pca: true
+pca_components: 100       # Anzahl PCA-Komponenten
+
+# === Modell ===
+model: "rf"
+model_params:
+  n_estimators: 300
+  max_depth: 20              # Ridge/Lasso Regularisierung
+
+# === Output ===
+save_predictions: true    # prediction.csv für Kaggle erzeugen
