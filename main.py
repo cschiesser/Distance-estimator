@@ -95,7 +95,7 @@ if __name__ == "__main__":
     #HOW THE DATASET LOOKS LIKE
     #print_dataset_plot()
 
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.2, random_state=42,shuffle=True)
+    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42,shuffle=True)
 
     #region Preprocessing Data
     """
@@ -190,29 +190,34 @@ if __name__ == "__main__":
 
 
     params = {
-        "max_depth": [3,6,8],
-        "min_samples_leaf": [2,4,8],
-        "learning_rate": [0.01,0.03],
-        "loss": ["squared_error"],
-        "max_iter": [100*y for y in range(6)],
-        "random_state": [0],
+    "max_depth": [2, 3, 4, 6,8],
+    "min_samples_leaf": [2, 4, 8],
+    "learning_rate": [0.01, 0.03, 0.05],
+    "loss": ["squared_error", "absolute_error"],
+    "random_state": [0],
     }
 
 
 
     from sklearn import ensemble
+    from sklearn.experimental import enable_halving_search_cv
 
     model = ensemble.HistGradientBoostingRegressor()
     # Train on preprocessed features.
-    from sklearn.model_selection import GridSearchCV
+    from sklearn.model_selection import HalvingRandomSearchCV
 
-    grid_search = GridSearchCV(
-        model,
-        params,
-        cv=3,
-        verbose=3,
-        n_jobs=-1,
-        scoring="neg_mean_absolute_error"
+    grid_search = HalvingRandomSearchCV(
+    estimator=model,
+    param_distributions=params,
+    resource="max_iter",
+    min_resources=100,
+    max_resources=700,
+    factor=2,
+    cv=3,
+    scoring="neg_mean_absolute_error",
+    n_jobs=2,
+    verbose=3,
+    aggressive_elimination=True
         )
 
     grid_search.fit(X_train_scaled_robust,y_train)
