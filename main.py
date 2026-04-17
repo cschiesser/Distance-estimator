@@ -7,33 +7,43 @@ from sklearn.model_selection import train_test_split
 
 # SVRs are not allowed in this project.
 
-    ###It takes as input an image captured by ANYmal's camera and it outputs an estimate of the distance to the closest obstacle in the image.
+def print_dataset_plot():
+    print("Dataset ARRAY")
+    print(images.shape)
+    print(distances.shape)
 
-    #What we have
+    print(images[0].max())
 
-    #train_images : Here you see the robot's observations from its camera while it is travelling around an office.
+    Plotting distance Lables
+    X = np.arange(len(distances))   # integer indices: [0, 1, 2, ..., 2999]
+    Y = distances     
 
-    #train_labels : Here you see the distance to the closest obstacle for each image in meters. 
+    fig, ax = plt.subplots()
+    ax.plot(X,Y)
+    plt.show()
 
-    
+#region Project Description
+"""
+This model takes as input an image captured by ANYmal's camera and outputs
+an estimate of the distance to the closest obstacle in the image.
 
-    #FEATURES -> train_images
-    #LABLES -> train_lables (distances)
+Data overview:
+- Features: train_images
+- Labels: train_labels (distances in meters)
 
-    #Images are represented by **pixel intensity values** 
-    #In a typical COLOUR image, pixel colours are obtained by mixing the primary colours red, green, and blue (RGB).
+Image representation:
+- Pixel intensity values (RGB)
+- Typical image shape: W x H x 3
 
-    #Therefore, an image can be described as a matrix (M) of dimensions:        **W x H x3**
+Processing idea:
+- Flatten each image into a 1D feature vector
+- Then each color component of each pixel is treated as one feature
 
-    #PROCESSING
-
-    #To treat images as feature vectors, we FLATTEN the images, i.e. the rows of the image matrices are concatenated
-    #sequentially in a single row. In a colour image, we further flatten the colour dimension similarly.
-
-
-    #Then, each colour component of each pixel value can be thought of as a feature.
-    #For example, an RGB image with height = 30 pixels and width = 30 pixels gives us ** 30 x 30 x 3 = 2700 **
-    #Max brightness = 255
+Example:
+- For an RGB image of 30 x 30 pixels: 30 x 30 x 3 = 2700 features
+- Max pixel brightness value: 255
+"""
+#endregion
 
 if __name__ == "__main__":
     # Load configs from "config.yaml"
@@ -58,7 +68,7 @@ if __name__ == "__main__":
 
 
 
-    ###DON'T REMOVE -> GRADING SIMULATION!!!!!!###
+#region DON'T REMOVE -> GRADING SIMULATION!!!!!!###
     
     from sklearn.metrics import mean_absolute_error
     y_pred = model.predict(X_test)
@@ -71,27 +81,13 @@ if __name__ == "__main__":
     test_pred = model.predict(test_images)
     save_results(test_pred)
 
-    ###DON'T REMOVE -> GRADING SIMULATION!!!!!!###
+#endregion
 
 
 
 
-    ##HOW THE DATASET LOOKS LIKE
-
-    #print("Dataset ARRAY")
-    #print(images.shape)
-    #print(distances.shape)
-
-    #print(images[0].max())
-
-    #Plotting distance Lables
-    #X = np.arange(len(distances))   # integer indices: [0, 1, 2, ..., 2999]
-    #Y = distances     
-
-    #fig, ax = plt.subplots()
-    #ax.plot(X,Y)
-    #plt.show()
-
+#HOW THE DATASET LOOKS LIKE
+print_dataset_plot()
 
 
     # possible preprocessing steps ... training the model
