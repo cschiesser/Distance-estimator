@@ -4,10 +4,15 @@ load_rgb: false           # false = grayscale, true = RGB (3x mehr Features)
 downsample_factor: 5      # 300x300 -> 60x60 (3600 Features grayscale)
 
 use_handcrafted_features: true   # NEU - schaltet Feature Engineering ein
+combine_with_pixels: false   # NEU: Handcrafted + rohe Pixel kombinieren
 
 # === Split ===
 val_size: 0.2             # Anteil Validation Split
 random_seed: 42           # Reproduzierbarkeit
+
+use_grid_search: false       # NEU: GridSearch aktivieren
+use_cv: true              # NEU
+cv_folds: 5               # NEU
 
 # === Preprocessing ===
 use_scaler: true          # StandardScaler an/aus
@@ -19,10 +24,10 @@ pca_components: 100       # Anzahl PCA-Komponenten
 # === Modell ===
 model: "hgb"
 model_params:
-  max_iter: 600
-  learning_rate: 0.05
-  max_depth: 6
-  l2_regularization: 0.3              # Ridge/Lasso Regularisierung
+  max_iter: 800
+  learning_rate: 0.03
+  max_depth: 8
+  l2_regularization: 0.5
 
 # === Output ===
 save_predictions: true    # prediction.csv für Kaggle erzeugen
