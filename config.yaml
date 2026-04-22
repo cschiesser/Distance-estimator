@@ -1,5 +1,35 @@
-data_dir: ./data
+# Daten
+data_dir: "./data"
+load_rgb: true           # <-- jetzt auf true
+downsample_factor: 5
 
-# Set the configs of data loading.
-load_rgb: False
-downsample_factor: 5 #[1, 300]
+# Split
+val_size: 0.2
+random_seed: 42
+
+# Cross-Validation
+use_cv: true
+cv_folds: 5
+
+# Strategie: "hgb" | "knn" | "stacking" | "blend"
+strategy: "blend"
+
+# HGB-Parameter
+model_params:
+  max_iter: 1200
+  learning_rate: 0.03
+  max_depth: 8
+  l2_regularization: 1.0
+  min_samples_leaf: 30
+  loss: "absolute_error"
+
+# kNN-Parameter (nur bei knn/stacking/blend verwendet)
+knn_params:
+  n_neighbors: 3
+  weights: "distance"
+
+# Gewicht für HGB bei blend (0.7 = 70% HGB + 30% kNN)
+w_hgb: 0.7
+
+# Output
+save_predictions: true

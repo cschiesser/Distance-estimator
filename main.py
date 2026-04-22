@@ -1,317 +1,319 @@
-from utils import load_config, load_dataset, load_test_dataset, print_results, save_results
-import matplotlib.pyplot as plt
+from utils import load_config, load_dataset, load_test_dataset, print_results, save_results, IMAGE_SIZE
 import numpy as np
 
-# COLIN: Imports, für handgemachte Features statt Rohpixel
-from skimage.filters import sobel
-from skimage.measure import block_reduce
-from skimage.feature import hog
-
-# sklearn imports...
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-from sklearn.utils.fixes import parse_version
-
-# SVRs are not allowed in this project.
-#WICHTIG ist für Erklärungsauftrag
-
-def print_dataset_plot(images_subset, distances_subset, bin_width=0.01, output_path="distance_distribution.png"):
-    print("Dataset ARRAY")
-    print(images_subset.shape)
-    print(distances_subset.shape)
-
-    print(images_subset[0].max())
-
-    # Plot a histogram: x-axis is distance, y-axis is number of samples.
-    distance_values = np.asarray(distances_subset, dtype=float)
-    min_distance = distance_values.min()
-    max_distance = distance_values.max()
-    bins = np.arange(min_distance, max_distance + bin_width, bin_width)
-
-    fig, ax = plt.subplots()
-    ax.hist(distance_values, bins=bins, edgecolor="black", linewidth=0.3)
-    ax.set_xlabel("Distance")
-    ax.set_ylabel("Count")
-    ax.set_title(f"Distance Distribution (bin width = {bin_width:.3f} m)")
-    ax.grid(axis="y", alpha=0.2)
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    print(f"[INFO]: Saved plot to {output_path}")
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.base import BaseEstimator, RegressorMixin
 
 
-def print_feature_distribution_plot(feature_matrix, bin_width=0.05, name="x_train_scaled_distribution", output_path=None):
-    # Flatten all feature values to inspect their global distribution.
-    feature_values = np.asarray(feature_matrix, dtype=float).ravel()
-    min_value = feature_values.min()
-    max_value = feature_values.max()
-    bins = np.arange(min_value, max_value + bin_width, bin_width)
+# ---------- Low-level Feature Helper (nur numpy) ----------
 
-    if output_path is None:
-        output_path = f"{name}.png"
+def gradients(img):
+    """Horizontale und vertikale Gradienten via zentrale Differenzen."""
+    img = img.astype(np.float64)
+    gx = np.zeros_like(img)
+    gy = np.zeros_like(img)
+    gx[:, 1:-1] = img[:, 2:] - img[:, :-2]
+    gy[1:-1, :] = img[2:, :] - img[:-2, :]
+    return gx, gy
 
-    fig, ax = plt.subplots()
-    ax.hist(feature_values, bins=bins, edgecolor="black", linewidth=0.3)
-    ax.set_xlabel("Feature value")
-    ax.set_ylabel("Count")
-    ax.set_title(f"{name} (bin width = {bin_width:.3f})")
-    ax.grid(axis="y", alpha=0.2)
-    fig.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close(fig)
-    print(f"[INFO]: Saved plot to {output_path}")
 
-# COLIN: Handgemachte Feature-Extraktion
-# Rohpixel sind stark von Beleuchtung und Szene abhängig.
-# Merkmale (Kanten, Gradient-Richtungen, Helligkeitsverteilung)
-#  - Nahe Objekte = scharfe Kanten
-#  - Flure mit Fluchtpunkt = dunkle Mitte, hellere Ränder
-#  - HOG erfasst lokale Gradient-Richtungen (Standard-CV-Technik)
-def extract_features(images_flat, image_size):
-    """Berechnet handcrafted Features aus den geflattenen grayscale Bildern."""
+def block_mean(img, n_blocks_y, n_blocks_x):
+    h, w = img.shape
+    bh, bw = h // n_blocks_y, w // n_blocks_x
+    trimmed = img[:n_blocks_y * bh, :n_blocks_x * bw]
+    return trimmed.reshape(n_blocks_y, bh, n_blocks_x, bw).mean(axis=(1, 3))
+
+
+def block_std(img, n_blocks_y, n_blocks_x):
+    h, w = img.shape
+    bh, bw = h // n_blocks_y, w // n_blocks_x
+    trimmed = img[:n_blocks_y * bh, :n_blocks_x * bw]
+    return trimmed.reshape(n_blocks_y, bh, n_blocks_x, bw).std(axis=(1, 3))
+
+
+def rgb_to_gray(img_rgb):
+    """Standard-Grayscale-Konvertierung (ITU-R BT.601)."""
+    return 0.299 * img_rgb[..., 0] + 0.587 * img_rgb[..., 1] + 0.114 * img_rgb[..., 2]
+
+
+# ---------- Feature-Extraktion ----------
+
+def extract_gray_features(img, image_size):
+    """Feature-Vektor für ein einzelnes Graustufenbild (444 Features bei 60x60)."""
+    feats = []
+
+    feats += [img.mean(), img.std(), img.min(), img.max(), np.median(img)]
+    feats += np.percentile(img, [10, 25, 75, 90]).tolist()
+
+    row_means = img.mean(axis=1)
+    col_means = img.mean(axis=0)
+    feats += row_means.tolist()
+    feats += col_means.tolist()
+    feats += np.diff(row_means).tolist()
+    feats += np.diff(col_means).tolist()
+
+    feats += block_mean(img, 2, 2).flatten().tolist()
+    feats += block_mean(img, 4, 4).flatten().tolist()
+    feats += block_mean(img, 8, 8).flatten().tolist()
+
+    feats += block_std(img, 2, 2).flatten().tolist()
+    feats += block_std(img, 4, 4).flatten().tolist()
+    feats += block_std(img, 8, 8).flatten().tolist()
+
+    gx, gy = gradients(img)
+    grad_mag = np.sqrt(gx * gx + gy * gy)
+    feats += [
+        grad_mag.mean(), grad_mag.std(), grad_mag.max(),
+        np.abs(gx).mean(), np.abs(gy).mean(),
+        grad_mag[:image_size // 2].mean(),
+        grad_mag[image_size // 2:].mean(),
+        grad_mag[:, :image_size // 2].mean(),
+        grad_mag[:, image_size // 2:].mean(),
+    ]
+
+    n_strips = 6
+    strip_h = image_size // n_strips
+    for i in range(n_strips):
+        strip = grad_mag[i * strip_h:(i + 1) * strip_h]
+        feats += [strip.mean(), strip.std()]
+
+    hist, _ = np.histogram(img, bins=8, range=(img.min(), img.max() + 1e-9))
+    hist = hist / hist.sum()
+    feats += hist.tolist()
+
+    return feats
+
+
+def extract_color_features(img_rgb, image_size):
+    """Kompakte Farb-Features.
+
+    Idee: Nicht alle Features x3 pro Kanal (würde bei 3000 Samples overfitten),
+    sondern gezielt Farbinfo die für Distanz / Szenentyp relevant ist:
+    - Globale Mean/Std pro Kanal (6)
+    - 3x3 Grid Mean pro Kanal (27) => grobe Farbverteilung
+    - Obere/untere Hälfte pro Kanal (6) => Himmel vs Boden
+    - Farbverhältnisse R/G, R/B, G/B (3) => Szenentyp (draussen/drinnen)
+    """
+    feats = []
+    R, G, B = img_rgb[..., 0], img_rgb[..., 1], img_rgb[..., 2]
+
+    for C in (R, G, B):
+        feats += [C.mean(), C.std()]
+
+    for C in (R, G, B):
+        feats += block_mean(C, 3, 3).flatten().tolist()
+
+    half = image_size // 2
+    for C in (R, G, B):
+        feats += [C[:half].mean(), C[half:].mean()]
+
+    feats += [
+        R.mean() / (G.mean() + 1.0),
+        R.mean() / (B.mean() + 1.0),
+        G.mean() / (B.mean() + 1.0),
+    ]
+
+    return feats
+
+
+def extract_features(images_flat, image_size, use_rgb=False):
+    """
+    use_rgb=False: (n, H*W) -> nur Grayscale-Features
+    use_rgb=True:  (n, H*W*3) -> Grayscale-Features auf Luma + Color-Features
+    """
     n = images_flat.shape[0]
-    images = images_flat.reshape(n, image_size, image_size)
+    if use_rgb:
+        images = images_flat.reshape(n, image_size, image_size, 3)
+    else:
+        images = images_flat.reshape(n, image_size, image_size)
 
     out = []
     for img in images:
-        feats = []
-
-        feats += [img.mean(), img.std(), img.min(), img.max(), np.median(img)]
-
-        feats += img.mean(axis=1).tolist()
-        feats += img.mean(axis=0).tolist()
-
-        grid = block_reduce(img, block_size=(image_size // 3, image_size // 3), func=np.mean)
-        feats += grid.flatten()[:9].tolist()
-
-        edges = sobel(img)
-        feats += [
-            edges.mean(), edges.std(), edges.max(),
-            edges[image_size // 2:].mean(),
-            edges[:image_size // 2].mean(),
-        ]
-
-        # HOG
-        hog_feats = hog(img, orientations=8, pixels_per_cell=(10, 10),
-                        cells_per_block=(2, 2), feature_vector=True)
-        feats += hog_feats.tolist()
-
+        if use_rgb:
+            gray = rgb_to_gray(img)
+            feats = extract_gray_features(gray, image_size)
+            feats += extract_color_features(img, image_size)
+        else:
+            feats = extract_gray_features(img, image_size)
         out.append(feats)
 
     return np.array(out)
 
 
-#region Project Description
-"""
-This model takes as input an image captured by ANYmal's camera and outputs
-an estimate of the distance to the closest obstacle in the image.
+# ---------- Modelle ----------
 
-Data overview:
-- Features: train_images
-- Labels: train_labels (distances in meters)
+def build_hgb(params, seed):
+    return HistGradientBoostingRegressor(
+        max_iter=params.get("max_iter", 800),
+        learning_rate=params.get("learning_rate", 0.03),
+        max_depth=params.get("max_depth", 8),
+        l2_regularization=params.get("l2_regularization", 0.5),
+        min_samples_leaf=params.get("min_samples_leaf", 20),
+        loss=params.get("loss", "absolute_error"),
+        random_state=seed,
+    )
 
-Image representation:
-- Pixel intensity values (RGB)
-- Typical image shape: W x H x 3
 
-Processing idea:
-- Flatten each image into a 1D feature vector
-- Then each color component of each pixel is treated as one feature
+def build_knn(params):
+    return KNeighborsRegressor(
+        n_neighbors=params.get("n_neighbors", 10),
+        weights=params.get("weights", "distance"),
+        n_jobs=-1,
+    )
 
-Example:
-- For an RGB image of 30 x 30 pixels: 30 x 30 x 3 = 2700 features
-- Max pixel brightness value: 255
-"""
-#endregion
+
+# ---------- Stacking: kNN-Prediction als zusätzliches Feature für HGB ----------
+
+class KnnStackedHGB(BaseEstimator, RegressorMixin):
+    """HGB bekommt als zusätzliches Feature die Out-of-Fold kNN-Prediction.
+
+    Warum Out-of-Fold: Wenn kNN auf Trainingsdaten predicted, findet es sich
+    selbst als nächsten Nachbar -> unrealistisch gute Prediction -> HGB lernt
+    dem Signal zu stark zu vertrauen. Mit OOF bekommt HGB ein ehrliches Signal.
+    """
+
+    def __init__(self, hgb_params=None, knn_params=None, seed=42, n_folds=5):
+        self.hgb_params = hgb_params or {}
+        self.knn_params = knn_params or {}
+        self.seed = seed
+        self.n_folds = n_folds
+
+    def fit(self, X, y):
+        X = np.asarray(X)
+        y = np.asarray(y)
+        kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.seed)
+        oof_knn = np.zeros(len(y))
+
+        for train_idx, val_idx in kf.split(X):
+            knn_pipe = Pipeline([
+                ("scaler", StandardScaler()),
+                ("knn", build_knn(self.knn_params)),
+            ])
+            knn_pipe.fit(X[train_idx], y[train_idx])
+            oof_knn[val_idx] = knn_pipe.predict(X[val_idx])
+
+        # kNN auf gesamten Trainingsdaten fitten (für spätere Test-Predictions)
+        self.knn_full_ = Pipeline([
+            ("scaler", StandardScaler()),
+            ("knn", build_knn(self.knn_params)),
+        ])
+        self.knn_full_.fit(X, y)
+
+        # HGB auf Features + OOF-kNN-Prediction
+        X_stacked = np.column_stack([X, oof_knn])
+        self.hgb_ = build_hgb(self.hgb_params, self.seed)
+        self.hgb_.fit(X_stacked, y)
+        return self
+
+    def predict(self, X):
+        X = np.asarray(X)
+        knn_pred = self.knn_full_.predict(X)
+        X_stacked = np.column_stack([X, knn_pred])
+        return self.hgb_.predict(X_stacked)
+
+
+# ---------- Blend: gewichteter Mittelwert HGB + kNN ----------
+
+class BlendedHgbKnn(BaseEstimator, RegressorMixin):
+    """Trainiert HGB und kNN separat, mittelt Predictions gewichtet."""
+
+    def __init__(self, hgb_params=None, knn_params=None, seed=42, w_hgb=0.7):
+        self.hgb_params = hgb_params or {}
+        self.knn_params = knn_params or {}
+        self.seed = seed
+        self.w_hgb = w_hgb
+
+    def fit(self, X, y):
+        self.hgb_ = build_hgb(self.hgb_params, self.seed)
+        self.hgb_.fit(X, y)
+
+        self.knn_ = Pipeline([
+            ("scaler", StandardScaler()),
+            ("knn", build_knn(self.knn_params)),
+        ])
+        self.knn_.fit(X, y)
+        return self
+
+    def predict(self, X):
+        return self.w_hgb * self.hgb_.predict(X) + (1 - self.w_hgb) * self.knn_.predict(X)
+
+
+# ---------- Modell-Dispatcher ----------
+
+def build_model(config):
+    strategy = config.get("strategy", "hgb").lower()
+    hgb_params = config.get("model_params", {})
+    knn_params = config.get("knn_params", {})
+    seed = config["random_seed"]
+
+    if strategy == "hgb":
+        return build_hgb(hgb_params, seed)
+    if strategy == "knn":
+        return Pipeline([
+            ("scaler", StandardScaler()),
+            ("knn", build_knn(knn_params)),
+        ])
+    if strategy == "stacking":
+        return KnnStackedHGB(hgb_params=hgb_params, knn_params=knn_params, seed=seed)
+    if strategy == "blend":
+        return BlendedHgbKnn(hgb_params=hgb_params, knn_params=knn_params,
+                             seed=seed, w_hgb=config.get("w_hgb", 0.7))
+    raise ValueError(f"Unknown strategy: {strategy}")
+
+
+# ==================== MAIN ====================
 
 if __name__ == "__main__":
-    # Load configs from "config.yaml"
     config = load_config()
 
-    # Load dataset: images and corresponding minimum distance values
+    # Daten laden
     images, distances = load_dataset(config)
-    print(f"[INFO]: Dataset loaded with {len(images)} samples.")
+    use_rgb = config.get("load_rgb", False)
+    strategy = config.get("strategy", "hgb").lower()
+    print(f"[INFO]: Dataset loaded with {len(images)} samples. RGB={use_rgb}, strategy='{strategy}'")
 
-
-
-    # TODO: Your implementation starts here
-    
-    # COLIN: Handgemachte Features
-    image_size = 300 // config["downsample_factor"]
-    print(f"[INFO]: Extracting features from {image_size}x{image_size} images...")
-    features = extract_features(images, image_size)
+    # Feature-Extraktion
+    image_size = IMAGE_SIZE[0] // config["downsample_factor"]
+    features = extract_features(images, image_size, use_rgb=use_rgb)
     print(f"[INFO]: Feature dim = {features.shape[1]}")
 
-    X = features         
-    Y = distances
-
-    #HOW THE DATASET LOOKS LIKE
-    #print_dataset_plot()
-
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42,shuffle=True)
-
-    #region Preprocessing Data
-    """
-    If you examine the images, you will notice that illumination conditions and objects in the scene vary significantly between frames. This results in variations in pixel values.
-
-    For machine learning models to perform well, it is often important that features are scaled to a common range. Therefore, you may need to apply a scaling method from the scikit-learn preprocessing module.
-
-    WICHTIG ->              Wir sehen im plot der raw Data, dass es outliers gibt, welche gegen oben oder unten (sehr weit oder sehr nah) sind. def print_dataset_plot()
-
-                            scikit-learn.org dagt: "If some outliers are present in the set, robust scalers or other transformers can be more appropriate. The behaviors of the different scalers, transformers,
-                            and normalizers on a dataset containing marginal outliers are highlighted in Compare the effect of different scalers on data with outliers." https://scikit-learn.org/stable/modules/preprocessing.html (7.3)
-
-                            Für die erklärung unserer Preprocessing METHODE erwähne Plotting modelle und entscheidungen von https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#compare-the-effect-of-different-scalers-on-data-with-outliers
-
-                            Wichtige erkennungen: in unserem raw plot sehen wir , dass es sehr wenige outliers gibt! Die vorherige seite sagt: QuantileTransformer provides non-linear transformations in which distances between marginal outliers and inliers are shrunk.
-                            -> In meinen Augen sind diese outliers genau solche marginals, welche unsere unser model nicht beeinflussen obwohl sie es sollen !
-                            ACTUALLY ich habe es verwechselt warte.
-
-                            Power transform sieht besser auch, sie sagen:   Power transforms are a family of parametric, monotonic transformations that are applied to make data more Gaussian-like.
-                                                                            This is useful for modeling issues related to heteroscedasticity (non-constant variance), or other situations where normality is desired.
-                                                                            https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.PowerTransformer.html#powertransformer
-
-                                                                            PowerTransformer
-
-                                                                            Parameters:     method : {‘yeo-johnson’, ‘box-cox’}, default=’yeo-johnson’
-                                                                                                    The power transform method. Available methods are:  ‘yeo-johnson’ [1], works with positive and negative values
-                                                                                                                                                        ‘yeo-johnson’ [1], works with positive and negative values
-
-                                                                                            standardize :  bool, default=True
-                                                                                                            Set to True to apply zero-mean, unit-variance normalization to the transformed output.
-
-                                                                                            copy : bool, default=True
-                                                                                        
-
-                                                                            Attributes:     lambdas = ndarray of float of shape (n_features,)
-                                                                                                The parameters of the power transformation for selected features
-
-                                                                                            n_features_in : int
-                                                                                                Number of features seen during fit.
-                                                                                            
-                                                                                            feature_names_in_ : ndarray of shape (n_features_in,)
-                                                                                                Names of features seen during fit. Defined only when X has feature names that are all strings.
-
-                            Standardization, or mean removal and variance scaling: https://scikit-learn.org/stable/modules/preprocessing.html#standardization-or-mean-removal-and-variance-scaling
-
-                                    Standardization of datasets is a common requirement for many machine learning estimators implemented in scikit-learn;
-                                    they might behave badly if the individual features do not more or less look like standard normally distributed data: Gaussian with zero mean and unit variance.
-
-                                    LOOK AT PLOT DISTRIBUTION! 
-
-                                    The preprocessing module provides the StandardScaler utility class, which is a quick and easy way to perform the following operation on an array-like dataset.
-
-    """
-
-    from sklearn import preprocessing
-    
-    #region Achtung: Both StandardScaler and MinMaxScaler are very sensitive to the presence of outliers. https://scikit-learn.org/stable/auto_examples/preprocessing/plot_all_scaling.html#sphx-glr-auto-examples-preprocessing-plot-all-scaling-py
-    scaler_bad = preprocessing.StandardScaler().fit(X_train)
-    X_scaled_bad = scaler_bad.transform(X_train)
-
-    #SO SIEHTS NEU AUS aber schlecht wegen outliers bei standartscaler
-    print_feature_distribution_plot(
-        X_scaled_bad,
-        bin_width=0.05,
-        name="x_train_standard_scaled_distribution",
+    # Train / Val Split
+    X_train, X_val, y_train, y_val = train_test_split(
+        features, distances,
+        test_size=config["val_size"],
+        random_state=config["random_seed"],
     )
 
+    # Modell trainieren (Scaler ist in kNN/Stacking/Blend intern, für HGB nicht nötig)
+    model = build_model(config)
+    print(f"[INFO]: Training {model.__class__.__name__}")
+    model.fit(X_train, y_train)
 
+    # Auswertung
+    print("\n--- Train ---")
+    print_results(y_train, model.predict(X_train))
+    print("\n--- Validation ---")
+    print_results(y_val, model.predict(X_val))
 
-    #Besser -> RobustScaler 
-    #Unlike the previous scalers, the centering and scaling statistics of RobustScaler are based on percentiles and are therefore not influenced by a small number of very large marginal outliers.
-    from sklearn.preprocessing import RobustScaler
-    robust_scaler = RobustScaler(
-        quantile_range=(25.0,75.0),
-        with_centering=True,
-        with_scaling=True
-    )
+    # Cross-Validation
+    if config.get("use_cv", False):
+        print(f"\n[INFO]: Running {config['cv_folds']}-fold CV for strategy='{strategy}'...")
+        cv_model = build_model(config)
+        kf = KFold(n_splits=config["cv_folds"], shuffle=True, random_state=config["random_seed"])
+        scores = cross_val_score(cv_model, features, distances, cv=kf,
+                                 scoring="neg_mean_absolute_error", n_jobs=-1)
+        mae_cm = -scores * 100
+        print(f"[INFO]: CV MAE per fold (cm): {[f'{s:.2f}' for s in mae_cm]}")
+        print(f"[INFO]: CV MAE mean +/- std (cm): {mae_cm.mean():.2f} +/- {mae_cm.std():.2f}")
 
-    X_train_scaled_robust = robust_scaler.fit_transform(X_train)
-    X_test_scaled_robust = robust_scaler.transform(X_test)
-   
-
-    print_feature_distribution_plot(
-        X_train_scaled_robust,
-        bin_width=0.05,
-        name="x_train_robust_scaled_distribution",
-    )
-
-
-    #endregion
-    #endregion
-
-    # COLIN: PCA entfernt Features sind bereits kompakt
-    # from sklearn.decomposition import PCA
-    # pca = PCA(n_components=150, random_state=0)
-    # X_train_reduced = pca.fit_transform(X_train_scaled_robust)
-    # X_test_reduced  = pca.transform(X_test_scaled_robust)
-    # print(f"[INFO]: PCA erklärt {pca.explained_variance_ratio_.sum():.2%} der Varianz")
-
-
-    # COLIN: Grid 
-    params = {
-        "max_depth": [6, 8],
-        "min_samples_leaf": [20, 40],
-        "learning_rate": [0.03, 0.05],
-        "l2_regularization": [0.5, 1.0, 2.0],
-        "loss": ["absolute_error"],
-        "random_state": [0],
-    }
-
-
-
-    from sklearn import ensemble
-    from sklearn.experimental import enable_halving_search_cv
-
-    # COLIN: Early Stopping(stoppt automatisch, wenn Val-Score nicht mehr besser wird)
-    model = ensemble.HistGradientBoostingRegressor(
-        early_stopping=True,
-        validation_fraction=0.15,
-        n_iter_no_change=20,
-    )
-    # Train on preprocessed features.
-    from sklearn.model_selection import HalvingRandomSearchCV
-
-    grid_search = HalvingRandomSearchCV(
-    estimator=model,
-    param_distributions=params,
-    resource="max_iter",
-    min_resources=200,
-    max_resources=600,
-    factor=2,
-    cv=3,
-    scoring="neg_mean_absolute_error",
-    n_jobs=-1,
-    verbose=3,
-    aggressive_elimination=True
-        )
-
-    # COLIN: Ohne PCA
-    grid_search.fit(X_train_scaled_robust, y_train)
-
-
-
-
-#region DON'T REMOVE -> GRADING SIMULATION!!!!!!###
-    
-    from sklearn.metrics import mean_absolute_error
-    y_pred = grid_search.predict(X_test_scaled_robust)
-    
-    mae = mean_absolute_error(y_test, y_pred)
-    print(f"{mae:.4f}")
-
-    # Save Kaggle submission using the test split
-    # COLIN: Test-Pipeline Features extrahieren, skalieren, vorhersagen
-    test_images = np.asarray(load_test_dataset(config), dtype=float)
-    test_features = extract_features(test_images, image_size)   # COLIN: gleiche Features wie Training
-    test_features_scaled = robust_scaler.transform(test_features)
-    test_pred = grid_search.predict(test_features_scaled)
-    save_results(test_pred)
-
-#endregion
-
-
-
-    # possible preprocessing steps ... training the model
-
-    # Evaluation
-    # print_results(gt, pred)
+    # Testset vorhersagen + speichern
+    if config.get("save_predictions", True):
+        test_images = np.array(load_test_dataset(config))
+        test_features = extract_features(test_images, image_size, use_rgb=use_rgb)
+        test_pred = model.predict(test_features)
+        save_results(test_pred)
+        print(f"\n[INFO]: Saved {len(test_pred)} predictions to prediction.csv")
