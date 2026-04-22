@@ -1,23 +1,5 @@
-# Daten
-data_dir: "./data"
-load_rgb: false
-downsample_factor: 5
+data_dir: ./data
 
-# Split
-val_size: 0.2
-random_seed: 42
-
-# Cross-Validation
-use_cv: true
-cv_folds: 5
-
-# Modell: ridge | rf | hgb
-model: "hgb"
-model_params:
-  max_iter: 800
-  learning_rate: 0.03
-  max_depth: 8
-  l2_regularization: 0.5
-
-# Output
-save_predictions: true
+# Set the configs of data loading.
+load_rgb: False
+downsample_factor: 5 #[1, 300]

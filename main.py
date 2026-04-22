@@ -2,6 +2,11 @@ from utils import load_config, load_dataset, load_test_dataset, print_results, s
 import matplotlib.pyplot as plt
 import numpy as np
 
+# COLIN: Imports, für handgemachte Features statt Rohpixel
+from skimage.filters import sobel
+from skimage.measure import block_reduce
+from skimage.feature import hog
+
 # sklearn imports...
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -54,6 +59,46 @@ def print_feature_distribution_plot(feature_matrix, bin_width=0.05, name="x_trai
     plt.close(fig)
     print(f"[INFO]: Saved plot to {output_path}")
 
+# COLIN: Handgemachte Feature-Extraktion
+# Rohpixel sind stark von Beleuchtung und Szene abhängig.
+# Merkmale (Kanten, Gradient-Richtungen, Helligkeitsverteilung)
+#  - Nahe Objekte = scharfe Kanten
+#  - Flure mit Fluchtpunkt = dunkle Mitte, hellere Ränder
+#  - HOG erfasst lokale Gradient-Richtungen (Standard-CV-Technik)
+def extract_features(images_flat, image_size):
+    """Berechnet handcrafted Features aus den geflattenen grayscale Bildern."""
+    n = images_flat.shape[0]
+    images = images_flat.reshape(n, image_size, image_size)
+
+    out = []
+    for img in images:
+        feats = []
+
+        feats += [img.mean(), img.std(), img.min(), img.max(), np.median(img)]
+
+        feats += img.mean(axis=1).tolist()
+        feats += img.mean(axis=0).tolist()
+
+        grid = block_reduce(img, block_size=(image_size // 3, image_size // 3), func=np.mean)
+        feats += grid.flatten()[:9].tolist()
+
+        edges = sobel(img)
+        feats += [
+            edges.mean(), edges.std(), edges.max(),
+            edges[image_size // 2:].mean(),
+            edges[:image_size // 2].mean(),
+        ]
+
+        # HOG
+        hog_feats = hog(img, orientations=8, pixels_per_cell=(10, 10),
+                        cells_per_block=(2, 2), feature_vector=True)
+        feats += hog_feats.tolist()
+
+        out.append(feats)
+
+    return np.array(out)
+
+
 #region Project Description
 """
 This model takes as input an image captured by ANYmal's camera and outputs
@@ -89,7 +134,13 @@ if __name__ == "__main__":
 
     # TODO: Your implementation starts here
     
-    X = images
+    # COLIN: Handgemachte Features
+    image_size = 300 // config["downsample_factor"]
+    print(f"[INFO]: Extracting features from {image_size}x{image_size} images...")
+    features = extract_features(images, image_size)
+    print(f"[INFO]: Feature dim = {features.shape[1]}")
+
+    X = features         
     Y = distances
 
     #HOW THE DATASET LOOKS LIKE
@@ -188,13 +239,22 @@ if __name__ == "__main__":
     #endregion
     #endregion
 
+    # COLIN: PCA entfernt Features sind bereits kompakt
+    # from sklearn.decomposition import PCA
+    # pca = PCA(n_components=150, random_state=0)
+    # X_train_reduced = pca.fit_transform(X_train_scaled_robust)
+    # X_test_reduced  = pca.transform(X_test_scaled_robust)
+    # print(f"[INFO]: PCA erklärt {pca.explained_variance_ratio_.sum():.2%} der Varianz")
 
+
+    # COLIN: Grid 
     params = {
-    "max_depth": [2, 3, 4, 6,8],
-    "min_samples_leaf": [2, 4, 8],
-    "learning_rate": [0.01, 0.03, 0.05],
-    "loss": ["squared_error", "absolute_error"],
-    "random_state": [0],
+        "max_depth": [6, 8],
+        "min_samples_leaf": [20, 40],
+        "learning_rate": [0.03, 0.05],
+        "l2_regularization": [0.5, 1.0, 2.0],
+        "loss": ["absolute_error"],
+        "random_state": [0],
     }
 
 
@@ -202,7 +262,12 @@ if __name__ == "__main__":
     from sklearn import ensemble
     from sklearn.experimental import enable_halving_search_cv
 
-    model = ensemble.HistGradientBoostingRegressor()
+    # COLIN: Early Stopping(stoppt automatisch, wenn Val-Score nicht mehr besser wird)
+    model = ensemble.HistGradientBoostingRegressor(
+        early_stopping=True,
+        validation_fraction=0.15,
+        n_iter_no_change=20,
+    )
     # Train on preprocessed features.
     from sklearn.model_selection import HalvingRandomSearchCV
 
@@ -210,17 +275,18 @@ if __name__ == "__main__":
     estimator=model,
     param_distributions=params,
     resource="max_iter",
-    min_resources=100,
-    max_resources=700,
+    min_resources=200,
+    max_resources=600,
     factor=2,
     cv=3,
     scoring="neg_mean_absolute_error",
-    n_jobs=2,
+    n_jobs=-1,
     verbose=3,
     aggressive_elimination=True
         )
 
-    grid_search.fit(X_train_scaled_robust,y_train)
+    # COLIN: Ohne PCA
+    grid_search.fit(X_train_scaled_robust, y_train)
 
 
 
@@ -234,9 +300,11 @@ if __name__ == "__main__":
     print(f"{mae:.4f}")
 
     # Save Kaggle submission using the test split
+    # COLIN: Test-Pipeline Features extrahieren, skalieren, vorhersagen
     test_images = np.asarray(load_test_dataset(config), dtype=float)
-    test_images_scaled = robust_scaler.transform(test_images)
-    test_pred = grid_search.predict(test_images_scaled)
+    test_features = extract_features(test_images, image_size)   # COLIN: gleiche Features wie Training
+    test_features_scaled = robust_scaler.transform(test_features)
+    test_pred = grid_search.predict(test_features_scaled)
     save_results(test_pred)
 
 #endregion
@@ -247,4 +315,3 @@ if __name__ == "__main__":
 
     # Evaluation
     # print_results(gt, pred)
-
