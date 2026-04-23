@@ -1,42 +1,22 @@
-# Daten
-data_dir: "./data"
+data_dir: ./data
 load_rgb: true
 downsample_factor: 5
 
-# Split
-val_size: 0.2
-random_seed: 42
+test_size: 0.2
+random_state: 42
 
-# Cross-Validation
-use_cv: true
-cv_folds: 5
+knn:
+  n_neighbors: 2
+  weights: distance
 
-# HGB-Parameter (Meta-Learner im Stacking)
-model_params:
-  max_iter: 1200
-  learning_rate: 0.03
-  max_depth: 8
-  l2_regularization: 1.0
-  min_samples_leaf: 30
-  loss: "absolute_error"
+pca:
+  n_components: 50
 
-# kNN-Parameter (Base-Learner im Stacking)
-knn_params:
-  n_neighbors: 3
-  weights: "distance"
+extratrees:
+  n_estimators: 600
+  max_depth: 25
+  min_samples_leaf: 2
+  max_features: 0.3
 
-# ExtraTrees-Parameter (zweiter Base-Learner im Stacking)
-et_params:
-  n_estimators: 500
-  max_features: "sqrt"
-  min_samples_leaf: 5
-
-# RandomForest haben wir getestet - kein signifikanter Gewinn weil zu aehnlich
-# zu HGB/ExtraTrees. PCA haben wir getestet - HGB findet Feature-Kombinationen
-# selbst, PCA war redundant.
-
-# Multi-Seed Bagging: n Modelle mit verschiedenen Seeds, Predictions gemittelt
-bagging_seeds: [42, 123, 456]
-
-# Output
-save_predictions: true
+feature_engineering:
+  grid_size: 4
