@@ -3,7 +3,7 @@ import numpy as np
 
 from sklearn.model_selection import train_test_split, KFold, cross_val_score
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor, ExtraTreesRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, RegressorMixin
@@ -43,7 +43,11 @@ def rgb_to_gray(img_rgb):
 # ---------- Feature-Extraktion ----------
 
 def extract_gray_features(img, image_size):
-    """Feature-Vektor für ein einzelnes Graustufenbild (444 Features bei 60x60)."""
+    """Feature-Vektor fuer ein einzelnes Graustufenbild.
+
+    Feature-Gruppen: Globale Stats, Row/Col-Profile, Block-Means/Stds (2/4/8),
+    Gradienten-Magnitude, Gradienten-Streifen, Histogram.
+    """
     feats = []
 
     feats += [img.mean(), img.std(), img.min(), img.max(), np.median(img)]
@@ -91,12 +95,10 @@ def extract_gray_features(img, image_size):
 def extract_color_features(img_rgb, image_size):
     """Kompakte Farb-Features.
 
-    Idee: Nicht alle Features x3 pro Kanal (würde bei 3000 Samples overfitten),
-    sondern gezielt Farbinfo die für Distanz / Szenentyp relevant ist:
     - Globale Mean/Std pro Kanal (6)
-    - 3x3 Grid Mean pro Kanal (27) => grobe Farbverteilung
-    - Obere/untere Hälfte pro Kanal (6) => Himmel vs Boden
-    - Farbverhältnisse R/G, R/B, G/B (3) => Szenentyp (draussen/drinnen)
+    - 3x3 Grid Mean pro Kanal (27)
+    - Obere/untere Haelfte pro Kanal (6)
+    - Farbverhaeltnisse R/G, R/B, G/B (3)
     """
     feats = []
     R, G, B = img_rgb[..., 0], img_rgb[..., 1], img_rgb[..., 2]
@@ -144,7 +146,7 @@ def extract_features(images_flat, image_size, use_rgb=False):
     return np.array(out)
 
 
-# ---------- Modelle ----------
+# ---------- Modell-Bausteine ----------
 
 def build_hgb(params, seed):
     return HistGradientBoostingRegressor(
@@ -160,25 +162,48 @@ def build_hgb(params, seed):
 
 def build_knn(params):
     return KNeighborsRegressor(
-        n_neighbors=params.get("n_neighbors", 10),
+        n_neighbors=params.get("n_neighbors", 3),
         weights=params.get("weights", "distance"),
         n_jobs=-1,
     )
 
 
-# ---------- Stacking: kNN-Prediction als zusätzliches Feature für HGB ----------
+def build_et(params, seed):
+    """ExtraTrees als zweites Base-Modell neben kNN.
+
+    ExtraTrees randomisiert nicht nur Feature-Subsets sondern auch Split-Werte
+    -> staerker dekorreliert zu Gradient Boosting als RandomForest.
+    """
+    return ExtraTreesRegressor(
+        n_estimators=params.get("n_estimators", 500),
+        max_features=params.get("max_features", "sqrt"),
+        min_samples_leaf=params.get("min_samples_leaf", 5),
+        n_jobs=-1,
+        random_state=seed,
+    )
+
+
+# ---------- Stacking: kNN + ExtraTrees als OOF-Features fuer HGB ----------
 
 class KnnStackedHGB(BaseEstimator, RegressorMixin):
-    """HGB bekommt als zusätzliches Feature die Out-of-Fold kNN-Prediction.
+    """HGB bekommt als zusaetzliche Features die Out-of-Fold Predictions
+    von kNN und ExtraTrees.
 
-    Warum Out-of-Fold: Wenn kNN auf Trainingsdaten predicted, findet es sich
-    selbst als nächsten Nachbar -> unrealistisch gute Prediction -> HGB lernt
-    dem Signal zu stark zu vertrauen. Mit OOF bekommt HGB ein ehrliches Signal.
+    Warum OOF: Wenn Base-Learner auf Trainingsdaten predicten wuerden,
+    kennen sie die Samples bereits -> unrealistisch gute Predictions -> HGB
+    ueberschaetzt das Signal. Mit OOF bekommt HGB eine ehrliche Einschaetzung,
+    wie nuetzlich die Base-Learner auf neuen Daten sind.
+
+    Warum 2 Base-Learner: kNN (instanz-basiert, lokal) und ExtraTrees
+    (tree-basiert, zufaellige Splits) machen strukturell andere Fehler als
+    HGB. HGB lernt welchem Signal es wann vertrauen soll.
     """
 
-    def __init__(self, hgb_params=None, knn_params=None, seed=42, n_folds=5):
+    def __init__(self, hgb_params=None, knn_params=None, et_params=None,
+                 seed=42, n_folds=5):
         self.hgb_params = hgb_params or {}
         self.knn_params = knn_params or {}
+        self.et_params = et_params or {}
         self.seed = seed
         self.n_folds = n_folds
 
@@ -186,9 +211,13 @@ class KnnStackedHGB(BaseEstimator, RegressorMixin):
         X = np.asarray(X)
         y = np.asarray(y)
         kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=self.seed)
+
+        # OOF-Predictions: zwei Spalten, eine pro Base-Learner
         oof_knn = np.zeros(len(y))
+        oof_et = np.zeros(len(y))
 
         for train_idx, val_idx in kf.split(X):
+            # kNN-Fold
             knn_pipe = Pipeline([
                 ("scaler", StandardScaler()),
                 ("knn", build_knn(self.knn_params)),
@@ -196,15 +225,23 @@ class KnnStackedHGB(BaseEstimator, RegressorMixin):
             knn_pipe.fit(X[train_idx], y[train_idx])
             oof_knn[val_idx] = knn_pipe.predict(X[val_idx])
 
-        # kNN auf gesamten Trainingsdaten fitten (für spätere Test-Predictions)
+            # ExtraTrees-Fold (kein Scaler noetig, Tree-Modell)
+            et = build_et(self.et_params, self.seed)
+            et.fit(X[train_idx], y[train_idx])
+            oof_et[val_idx] = et.predict(X[val_idx])
+
+        # Base-Learner auf gesamtem Trainingsset fitten (fuer Test-Predictions)
         self.knn_full_ = Pipeline([
             ("scaler", StandardScaler()),
             ("knn", build_knn(self.knn_params)),
         ])
         self.knn_full_.fit(X, y)
 
-        # HGB auf Features + OOF-kNN-Prediction
-        X_stacked = np.column_stack([X, oof_knn])
+        self.et_full_ = build_et(self.et_params, self.seed)
+        self.et_full_.fit(X, y)
+
+        # HGB auf: [Original-Features, OOF-kNN, OOF-ET]
+        X_stacked = np.column_stack([X, oof_knn, oof_et])
         self.hgb_ = build_hgb(self.hgb_params, self.seed)
         self.hgb_.fit(X_stacked, y)
         return self
@@ -212,57 +249,60 @@ class KnnStackedHGB(BaseEstimator, RegressorMixin):
     def predict(self, X):
         X = np.asarray(X)
         knn_pred = self.knn_full_.predict(X)
-        X_stacked = np.column_stack([X, knn_pred])
+        et_pred = self.et_full_.predict(X)
+        X_stacked = np.column_stack([X, knn_pred, et_pred])
         return self.hgb_.predict(X_stacked)
 
 
-# ---------- Blend: gewichteter Mittelwert HGB + kNN ----------
+# ---------- Multi-Seed Bagging Wrapper ----------
 
-class BlendedHgbKnn(BaseEstimator, RegressorMixin):
-    """Trainiert HGB und kNN separat, mittelt Predictions gewichtet."""
+class BaggedStackedHGB(BaseEstimator, RegressorMixin):
+    """Wrapper der n KnnStackedHGB-Modelle mit verschiedenen Seeds trainiert
+    und die Predictions mittelt.
 
-    def __init__(self, hgb_params=None, knn_params=None, seed=42, w_hgb=0.7):
+    Warum: Jeder Seed produziert leicht andere Folds und andere Baum-Strukturen
+    in ExtraTrees und HGB. Die systematischen Fehler (Bias) bleiben, die
+    zufaelligen (Varianz) mitteln sich raus -> stabileres, besseres Modell.
+
+    Kosten: n-fache Trainingszeit. Inference ist auch n-mal, aber immer noch
+    schnell genug fuer 622 Test-Samples.
+    """
+
+    def __init__(self, hgb_params=None, knn_params=None, et_params=None,
+                 seeds=(42, 123, 456, 789, 1000), n_folds=5):
         self.hgb_params = hgb_params or {}
         self.knn_params = knn_params or {}
-        self.seed = seed
-        self.w_hgb = w_hgb
+        self.et_params = et_params or {}
+        self.seeds = tuple(seeds)
+        self.n_folds = n_folds
 
     def fit(self, X, y):
-        self.hgb_ = build_hgb(self.hgb_params, self.seed)
-        self.hgb_.fit(X, y)
-
-        self.knn_ = Pipeline([
-            ("scaler", StandardScaler()),
-            ("knn", build_knn(self.knn_params)),
-        ])
-        self.knn_.fit(X, y)
+        self.models_ = []
+        for seed in self.seeds:
+            m = KnnStackedHGB(
+                hgb_params=self.hgb_params,
+                knn_params=self.knn_params,
+                et_params=self.et_params,
+                seed=seed,
+                n_folds=self.n_folds,
+            )
+            m.fit(X, y)
+            self.models_.append(m)
         return self
 
     def predict(self, X):
-        return self.w_hgb * self.hgb_.predict(X) + (1 - self.w_hgb) * self.knn_.predict(X)
+        preds = np.column_stack([m.predict(X) for m in self.models_])
+        return preds.mean(axis=1)
 
-
-# ---------- Modell-Dispatcher ----------
 
 def build_model(config):
-    strategy = config.get("strategy", "hgb").lower()
-    hgb_params = config.get("model_params", {})
-    knn_params = config.get("knn_params", {})
-    seed = config["random_seed"]
-
-    if strategy == "hgb":
-        return build_hgb(hgb_params, seed)
-    if strategy == "knn":
-        return Pipeline([
-            ("scaler", StandardScaler()),
-            ("knn", build_knn(knn_params)),
-        ])
-    if strategy == "stacking":
-        return KnnStackedHGB(hgb_params=hgb_params, knn_params=knn_params, seed=seed)
-    if strategy == "blend":
-        return BlendedHgbKnn(hgb_params=hgb_params, knn_params=knn_params,
-                             seed=seed, w_hgb=config.get("w_hgb", 0.7))
-    raise ValueError(f"Unknown strategy: {strategy}")
+    """Multi-Seed Bagging ueber kNN+ExtraTrees Stacking mit HGB als Meta-Learner."""
+    return BaggedStackedHGB(
+        hgb_params=config.get("model_params", {}),
+        knn_params=config.get("knn_params", {}),
+        et_params=config.get("et_params", {}),
+        seeds=config.get("bagging_seeds", [42, 123, 456, 789, 1000]),
+    )
 
 
 # ==================== MAIN ====================
@@ -273,8 +313,7 @@ if __name__ == "__main__":
     # Daten laden
     images, distances = load_dataset(config)
     use_rgb = config.get("load_rgb", False)
-    strategy = config.get("strategy", "hgb").lower()
-    print(f"[INFO]: Dataset loaded with {len(images)} samples. RGB={use_rgb}, strategy='{strategy}'")
+    print(f"[INFO]: Dataset loaded with {len(images)} samples. RGB={use_rgb}")
 
     # Feature-Extraktion
     image_size = IMAGE_SIZE[0] // config["downsample_factor"]
@@ -288,7 +327,7 @@ if __name__ == "__main__":
         random_state=config["random_seed"],
     )
 
-    # Modell trainieren (Scaler ist in kNN/Stacking/Blend intern, für HGB nicht nötig)
+    # Modell trainieren
     model = build_model(config)
     print(f"[INFO]: Training {model.__class__.__name__}")
     model.fit(X_train, y_train)
@@ -301,7 +340,7 @@ if __name__ == "__main__":
 
     # Cross-Validation
     if config.get("use_cv", False):
-        print(f"\n[INFO]: Running {config['cv_folds']}-fold CV for strategy='{strategy}'...")
+        print(f"\n[INFO]: Running {config['cv_folds']}-fold CV...")
         cv_model = build_model(config)
         kf = KFold(n_splits=config["cv_folds"], shuffle=True, random_state=config["random_seed"])
         scores = cross_val_score(cv_model, features, distances, cv=kf,

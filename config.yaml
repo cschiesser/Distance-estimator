@@ -1,6 +1,6 @@
 # Daten
 data_dir: "./data"
-load_rgb: true           # <-- jetzt auf true
+load_rgb: true
 downsample_factor: 5
 
 # Split
@@ -11,10 +11,7 @@ random_seed: 42
 use_cv: true
 cv_folds: 5
 
-# Strategie: "hgb" | "knn" | "stacking" | "blend"
-strategy: "blend"
-
-# HGB-Parameter
+# HGB-Parameter (Meta-Learner im Stacking)
 model_params:
   max_iter: 1200
   learning_rate: 0.03
@@ -23,13 +20,23 @@ model_params:
   min_samples_leaf: 30
   loss: "absolute_error"
 
-# kNN-Parameter (nur bei knn/stacking/blend verwendet)
+# kNN-Parameter (Base-Learner im Stacking)
 knn_params:
   n_neighbors: 3
   weights: "distance"
 
-# Gewicht für HGB bei blend (0.7 = 70% HGB + 30% kNN)
-w_hgb: 0.7
+# ExtraTrees-Parameter (zweiter Base-Learner im Stacking)
+et_params:
+  n_estimators: 500
+  max_features: "sqrt"
+  min_samples_leaf: 5
+
+# RandomForest haben wir getestet - kein signifikanter Gewinn weil zu aehnlich
+# zu HGB/ExtraTrees. PCA haben wir getestet - HGB findet Feature-Kombinationen
+# selbst, PCA war redundant.
+
+# Multi-Seed Bagging: n Modelle mit verschiedenen Seeds, Predictions gemittelt
+bagging_seeds: [42, 123, 456]
 
 # Output
 save_predictions: true
