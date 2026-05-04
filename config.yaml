@@ -1,22 +1,5 @@
 data_dir: ./data
-load_rgb: true
-downsample_factor: 5
 
-test_size: 0.2
-random_state: 42
-
-knn:
-  n_neighbors: 2
-  weights: distance
-
-pca:
-  n_components: 50
-
-extratrees:
-  n_estimators: 600
-  max_depth: 25
-  min_samples_leaf: 2
-  max_features: 0.3
-
-feature_engineering:
-  grid_size: 4
+# Set the configs of data loading.
+load_rgb: False
+downsample_factor: 5 #[1, 300]
