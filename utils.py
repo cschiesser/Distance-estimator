@@ -1,4 +1,4 @@
-"""Utility functions for project 1."""
+
 import yaml
 import os
 import numpy as np
